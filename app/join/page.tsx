@@ -11,6 +11,7 @@ const supabase = createClient(
 export default function JoinPage() {
   const [studentNumber, setStudentNumber] = useState("");
   const [name, setName] = useState("");
+  const [nickname, setNickname] = useState("");
   const [count, setCount] = useState(0);
   const [loading, setLoading] = useState(false);
   const [joined, setJoined] = useState(false);
@@ -23,6 +24,8 @@ export default function JoinPage() {
   const [answerSubmitted, setAnswerSubmitted] = useState(false);
   const [secondsLeft, setSecondsLeft] = useState(15);
 
+  const [recentNicknames, setRecentNicknames] = useState<string[]>([]);
+
   async function loadCount() {
     const { count, error } = await supabase
       .from("participants")
@@ -33,14 +36,34 @@ export default function JoinPage() {
     }
   }
 
+  async function loadRecentNicknames() {
+    const { data, error } = await supabase
+      .from("participants")
+      .select("nickname")
+      .not("nickname", "is", null)
+      .neq("nickname", "")
+      .order("id", { ascending: false })
+      .limit(5);
+
+    if (!error && data) {
+      setRecentNicknames(
+        data
+          .map((item: any) => item.nickname)
+          .filter((item: string | null) => Boolean(item))
+      );
+    }
+  }
+
   function logoutLocalStudent() {
     localStorage.removeItem("participant_id");
     localStorage.removeItem("student_number");
     localStorage.removeItem("participant_name");
+    localStorage.removeItem("participant_nickname");
 
     setJoined(false);
     setStudentNumber("");
     setName("");
+    setNickname("");
     setSelectedAnswer("");
     setAnswerSubmitted(false);
     setQuestion(null);
@@ -57,7 +80,7 @@ export default function JoinPage() {
 
     const { data, error } = await supabase
       .from("participants")
-      .select("id, student_number, name")
+      .select("id, student_number, name, nickname")
       .eq("id", Number(participantId))
       .maybeSingle();
 
@@ -71,12 +94,15 @@ export default function JoinPage() {
     setJoined(true);
     setStudentNumber(data.student_number ?? "");
     setName(data.name ?? "");
+    setNickname(data.nickname ?? "");
   }
 
   async function restoreStudent() {
     const participantId = localStorage.getItem("participant_id");
     const savedNumber = localStorage.getItem("student_number");
     const savedName = localStorage.getItem("participant_name");
+    const savedNickname =
+      localStorage.getItem("participant_nickname") ?? "";
 
     if (!participantId || !savedNumber || !savedName) {
       setJoined(false);
@@ -85,7 +111,7 @@ export default function JoinPage() {
 
     const { data, error } = await supabase
       .from("participants")
-      .select("id")
+      .select("id, nickname")
       .eq("id", Number(participantId))
       .maybeSingle();
 
@@ -96,6 +122,7 @@ export default function JoinPage() {
 
     setStudentNumber(savedNumber);
     setName(savedName);
+    setNickname(data.nickname ?? savedNickname);
     setJoined(true);
   }
 
@@ -160,10 +187,11 @@ export default function JoinPage() {
   useEffect(() => {
     restoreStudent();
     loadCount();
+    loadRecentNicknames();
     loadSession();
 
     const participantChannel = supabase
-      .channel("join-participants-final")
+      .channel("join-participants-nickname")
       .on(
         "postgres_changes",
         {
@@ -173,13 +201,14 @@ export default function JoinPage() {
         },
         () => {
           loadCount();
+          loadRecentNicknames();
           validateParticipant();
         }
       )
       .subscribe();
 
     const sessionChannel = supabase
-      .channel("join-session-final")
+      .channel("join-session-nickname")
       .on(
         "postgres_changes",
         {
@@ -247,6 +276,7 @@ export default function JoinPage() {
   async function handleJoin() {
     const cleanNumber = studentNumber.trim();
     const cleanName = name.trim();
+    const cleanNickname = nickname.trim();
 
     if (!cleanNumber || !cleanName) {
       setErrorMessage("請輸入編號與姓名");
@@ -261,6 +291,7 @@ export default function JoinPage() {
       .insert({
         student_number: cleanNumber,
         name: cleanName,
+        nickname: cleanNickname || null,
       })
       .select()
       .single();
@@ -271,6 +302,7 @@ export default function JoinPage() {
       if (error.code === "23505") {
         setErrorMessage("這個編號已經完成報到");
       } else {
+        console.error(error);
         setErrorMessage("報到失敗，請再試一次");
       }
       return;
@@ -279,10 +311,12 @@ export default function JoinPage() {
     localStorage.setItem("participant_id", String(data.id));
     localStorage.setItem("student_number", cleanNumber);
     localStorage.setItem("participant_name", cleanName);
+    localStorage.setItem("participant_nickname", cleanNickname);
 
     setJoined(true);
 
     await loadCount();
+    await loadRecentNicknames();
     await loadSession();
   }
 
@@ -296,7 +330,8 @@ export default function JoinPage() {
       return;
     }
 
-    const participantId = localStorage.getItem("participant_id");
+    const participantId =
+      localStorage.getItem("participant_id");
 
     if (!participantId) {
       logoutLocalStudent();
@@ -317,6 +352,7 @@ export default function JoinPage() {
       if (error.code === "23505") {
         setAnswerSubmitted(true);
       } else {
+        console.error(error);
         setErrorMessage("答案送出失敗，請再試一次");
       }
       return;
@@ -351,10 +387,15 @@ export default function JoinPage() {
     return `${base} border-zinc-800 bg-zinc-950 hover:border-blue-500`;
   }
 
+  // =========================
+  // 尚未報到
+  // =========================
+
   if (!joined) {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-black px-6 text-white">
+      <main className="flex min-h-screen items-center justify-center bg-black px-6 py-10 text-white">
         <div className="w-full max-w-xl">
+
           <p className="text-center text-sm tracking-[0.3em] text-zinc-500">
             115年 第四次替代役招訓
           </p>
@@ -364,38 +405,69 @@ export default function JoinPage() {
           </h1>
 
           <div className="mt-10 rounded-3xl border border-zinc-800 bg-zinc-950 p-8">
+
             <div className="text-center">
               <div className="text-sm tracking-[0.2em] text-zinc-500">
                 CURRENT
               </div>
 
               <div className="mt-2 text-4xl font-semibold">
-                <span className="text-blue-500">{count}</span>
-                <span className="text-zinc-600"> / 300</span>
+                <span className="text-blue-500">
+                  {count}
+                </span>
+
+                <span className="text-zinc-600">
+                  {" "} / 300
+                </span>
               </div>
+
+              <p className="mt-2 text-sm text-zinc-500">
+                目前報到人數
+              </p>
             </div>
 
             <div className="mt-8 space-y-4">
+
               <input
                 value={studentNumber}
-                onChange={(e) => setStudentNumber(e.target.value)}
+                onChange={(e) =>
+                  setStudentNumber(e.target.value)
+                }
                 placeholder="編號"
                 className="w-full rounded-2xl border border-zinc-800 bg-black px-5 py-4 text-lg outline-none focus:border-blue-500"
               />
 
               <input
                 value={name}
-                onChange={(e) => setName(e.target.value)}
+                onChange={(e) =>
+                  setName(e.target.value)
+                }
                 placeholder="姓名"
                 className="w-full rounded-2xl border border-zinc-800 bg-black px-5 py-4 text-lg outline-none focus:border-blue-500"
               />
+
+              <input
+                value={nickname}
+                onChange={(e) =>
+                  setNickname(e.target.value)
+                }
+                placeholder="好笑小名 😂（選填）"
+                maxLength={20}
+                className="w-full rounded-2xl border border-zinc-800 bg-black px-5 py-4 text-lg outline-none focus:border-blue-500"
+              />
+
+              <p className="px-2 text-sm text-zinc-600">
+                小名會出現在等待區，真實姓名不會公開。
+              </p>
 
               <button
                 onClick={handleJoin}
                 disabled={loading}
                 className="w-full rounded-full bg-blue-500 px-6 py-5 text-xl font-semibold hover:bg-blue-400 disabled:opacity-50"
               >
-                {loading ? "報到中..." : "完成報到 →"}
+                {loading
+                  ? "報到中..."
+                  : "完成報到 →"}
               </button>
             </div>
 
@@ -404,11 +476,16 @@ export default function JoinPage() {
                 {errorMessage}
               </div>
             )}
+
           </div>
         </div>
       </main>
     );
   }
+
+  // =========================
+  // 等待教官
+  // =========================
 
   if (
     !session ||
@@ -416,8 +493,10 @@ export default function JoinPage() {
     !question
   ) {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-black px-6 text-white">
+      <main className="flex min-h-screen items-center justify-center bg-black px-6 py-10 text-white">
+
         <div className="w-full max-w-2xl text-center">
+
           <p className="text-sm tracking-[0.3em] text-zinc-500">
             CHECK-IN COMPLETE
           </p>
@@ -430,24 +509,104 @@ export default function JoinPage() {
             {studentNumber}　{name}
           </p>
 
-          <div className="mt-12 rounded-3xl border border-zinc-800 bg-zinc-950 p-10">
+          {nickname && (
+            <div className="mt-4">
+              <span className="rounded-full border border-blue-500/30 bg-blue-500/10 px-5 py-2 text-blue-300">
+                😂 {nickname}
+              </span>
+            </div>
+          )}
+
+          <div className="mt-10 rounded-3xl border border-zinc-800 bg-zinc-950 p-10">
+
             <div className="mx-auto h-3 w-3 animate-pulse rounded-full bg-blue-500" />
 
             <p className="mt-6 text-2xl">
               等待教官開始
             </p>
 
-            <p className="mt-3 text-zinc-500">
-              目前已報到 {count} 人
-            </p>
+            <div className="mt-8">
+              <div className="text-sm tracking-[0.2em] text-zinc-500">
+                PARTICIPANTS
+              </div>
+
+              <div className="mt-2 text-5xl font-semibold">
+                <span className="text-blue-500">
+                  {count}
+                </span>
+
+                <span className="text-zinc-700">
+                  {" "} / 300
+                </span>
+              </div>
+
+              <p className="mt-3 text-zinc-500">
+                人已完成報到
+              </p>
+            </div>
+
           </div>
+
+          {recentNicknames.length > 0 && (
+            <div className="mt-6 rounded-3xl border border-zinc-800 bg-zinc-950 p-7">
+
+              <p className="text-sm tracking-[0.2em] text-zinc-500">
+                👀 WHO'S HERE?
+              </p>
+
+              <h2 className="mt-3 text-2xl font-semibold">
+                好笑的小名被發現了
+              </h2>
+
+              <div className="mt-6 space-y-3">
+
+                {recentNicknames.map(
+                  (item, index) => (
+                    <div
+                      key={`${item}-${index}`}
+                      className="rounded-2xl border border-zinc-800 bg-black px-5 py-4 text-lg"
+                    >
+                      <span className="mr-2">
+                        {index === 0
+                          ? "😂"
+                          : index === 1
+                          ? "👀"
+                          : index === 2
+                          ? "🚑"
+                          : index === 3
+                          ? "⚡"
+                          : "🤣"}
+                      </span>
+
+                      <span className="font-semibold text-blue-300">
+                        「{item}」
+                      </span>
+
+                      <span className="text-zinc-400">
+                        {" "}被發現了！
+                      </span>
+                    </div>
+                  )
+                )}
+
+              </div>
+            </div>
+          )}
+
         </div>
       </main>
     );
   }
 
-  const revealed = session.status === "revealed";
-  const locked = session.status === "locked";
+  // =========================
+  // 題目畫面
+  // =========================
+
+  const revealed =
+    session.status === "revealed";
+
+  const locked =
+    session.status === "locked";
 
   const isCorrect =
     selectedAnswer &&
@@ -455,8 +614,11 @@ export default function JoinPage() {
 
   return (
     <main className="min-h-screen bg-black px-6 py-8 text-white">
+
       <div className="mx-auto max-w-3xl">
+
         <div className="flex items-center justify-between gap-4">
+
           <div>
             <p className="text-sm tracking-[0.2em] text-zinc-500">
               EMT TRAINING
@@ -468,6 +630,7 @@ export default function JoinPage() {
           </div>
 
           <div className="text-right">
+
             <div className="text-4xl font-semibold">
               {secondsLeft}s
             </div>
@@ -475,53 +638,65 @@ export default function JoinPage() {
             <div className="mt-1 text-sm text-zinc-500">
               Q{question.question_number}
             </div>
+
           </div>
         </div>
 
         <div className="mt-8 rounded-3xl border border-zinc-800 bg-zinc-950 p-7">
+
           <h1 className="text-3xl font-semibold leading-relaxed">
             {question.question}
           </h1>
 
           <div className="mt-8 space-y-4">
-            {(["A", "B", "C", "D"] as const).map((letter) => {
-              const option =
-                letter === "A"
-                  ? question.option_a
-                  : letter === "B"
-                  ? question.option_b
-                  : letter === "C"
-                  ? question.option_c
-                  : question.option_d;
 
-              return (
-                <button
-                  key={letter}
-                  onClick={() => submitAnswer(letter)}
-                  disabled={
-                    answerSubmitted ||
-                    locked ||
-                    revealed ||
-                    secondsLeft <= 0
-                  }
-                  className={answerStyle(letter)}
-                >
-                  <span className="mr-4 font-semibold text-blue-500">
-                    {letter}
-                  </span>
+            {(["A", "B", "C", "D"] as const).map(
+              (letter) => {
 
-                  {option}
-                </button>
-              );
-            })}
+                const option =
+                  letter === "A"
+                    ? question.option_a
+                    : letter === "B"
+                    ? question.option_b
+                    : letter === "C"
+                    ? question.option_c
+                    : question.option_d;
+
+                return (
+                  <button
+                    key={letter}
+                    onClick={() =>
+                      submitAnswer(letter)
+                    }
+                    disabled={
+                      answerSubmitted ||
+                      locked ||
+                      revealed ||
+                      secondsLeft <= 0
+                    }
+                    className={answerStyle(letter)}
+                  >
+
+                    <span className="mr-4 font-semibold text-blue-500">
+                      {letter}
+                    </span>
+
+                    {option}
+
+                  </button>
+                );
+              }
+            )}
+
           </div>
         </div>
 
-        {answerSubmitted && session.status === "active" && (
-          <div className="mt-6 rounded-2xl border border-blue-500/30 bg-blue-500/10 p-5 text-center text-blue-200">
-            已送出答案 {selectedAnswer}
-          </div>
-        )}
+        {answerSubmitted &&
+          session.status === "active" && (
+            <div className="mt-6 rounded-2xl border border-blue-500/30 bg-blue-500/10 p-5 text-center text-blue-200">
+              已送出答案 {selectedAnswer}
+            </div>
+          )}
 
         {locked && (
           <div className="mt-6 rounded-2xl border border-zinc-700 bg-zinc-900 p-5 text-center">
@@ -537,6 +712,7 @@ export default function JoinPage() {
                 : "border-red-500/40 bg-red-500/10"
             }`}
           >
+
             <p className="text-sm tracking-[0.25em] text-zinc-500">
               RESULT
             </p>
@@ -574,8 +750,10 @@ export default function JoinPage() {
             <p className="mt-6 text-sm text-zinc-500">
               等待教官進入下一題
             </p>
+
           </div>
         )}
+
       </div>
     </main>
   );
