@@ -551,7 +551,7 @@ export default function JoinPage() {
             <div className="mt-6 rounded-3xl border border-zinc-800 bg-zinc-950 p-7">
 
               <p className="text-sm tracking-[0.2em] text-zinc-500">
-                👀 WHO'S HERE?
+                👀 WHO is HERE?
               </p>
 
               <h2 className="mt-3 text-2xl font-semibold">
